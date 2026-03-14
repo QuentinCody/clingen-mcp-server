@@ -1,471 +1,298 @@
 /**
- * ClinGen API catalog — hand-built from ClinGen documentation.
+ * ClinGen API catalog — multi-source: embedded static data + Evidence Repository REST API.
  *
- * Covers endpoints across gene-disease validity, dosage sensitivity,
- * clinical actionability, and variant curation.
+ * Gene-Disease Validity: Embedded static data (source: search.clinicalgenome.org/kb/gene-validity)
+ * Dosage Sensitivity: Embedded static data (source: search.clinicalgenome.org/kb/gene-dosage)
+ * Variant Classifications: Live REST API (erepo.clinicalgenome.org/evrepo/api)
  *
- * Two base URLs:
- * - search.clinicalgenome.org/kb — gene validity, actionability, variant curations
- * - dosage.clinicalgenome.org/api — haploinsufficiency/triplosensitivity scores
+ * NOTE: The ClinGen GCI GraphQL endpoint (genegraph.clinicalgenome.org/graphql) is currently
+ * returning 404 (as of 2026-03). Gene-disease validity and dosage sensitivity data are now
+ * served from embedded static datasets (~50 high-value gene curations). The Evidence Repository
+ * REST API for variant classifications remains operational.
  *
- * Paths starting with /dosage are routed to dosage.clinicalgenome.org/api.
- * All other paths are routed to search.clinicalgenome.org/kb.
+ * In Code Mode: api.get('/validity/curations', { gene: 'BRCA1' })
+ *               api.get('/dosage/genes/FBN1')
+ *               api.get('/classifications', { gene: 'BRCA1', matchMode: 'exact' })
  */
 
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
 
 export const clingenCatalog: ApiCatalog = {
-	name: "ClinGen",
-	baseUrl: "https://search.clinicalgenome.org/kb",
-	version: "1.0",
+	name: "ClinGen (Gene Validity + Dosage Sensitivity + Variant Curation)",
+	baseUrl: "embedded://clingen + https://erepo.clinicalgenome.org/evrepo/api",
+	version: "2026.03",
 	auth: "none",
-	endpointCount: 17,
+	endpointCount: 8,
 	notes:
-		"- Two base URLs: search.clinicalgenome.org/kb (validity, actionability, variants) and dosage.clinicalgenome.org/api (dosage sensitivity)\n" +
-		"- Paths starting with /dosage are auto-routed to the dosage API base URL\n" +
-		"- Gene-Disease Validity classifications: Definitive, Strong, Moderate, Limited, Disputed, Refuted, No Known Disease Relationship\n" +
-		"- Haploinsufficiency (HI) scores: 0=No Evidence, 1=Little Evidence, 2=Emerging Evidence, 3=Sufficient Evidence, 40=Autosomal Recessive\n" +
-		"- Triplosensitivity (TS) scores: 0=No Evidence, 1=Little Evidence, 2=Emerging Evidence, 3=Sufficient Evidence, 40=Autosomal Recessive\n" +
-		"- Mode of Inheritance (MOI): Autosomal Dominant (AD), Autosomal Recessive (AR), X-Linked (XL), etc.\n" +
-		"- Most endpoints return JSON with results arrays and pagination metadata\n" +
-		"- Gene symbols should be HGNC-approved (e.g., BRCA1, TP53, SCN1A)\n" +
-		"- Disease identifiers use MONDO IDs (e.g., MONDO:0007254) or free-text names",
+		"- Multi-source adapter: /validity/* (gene-disease validity), /dosage/* (dosage sensitivity), /classifications + /interpretations (variant curation)\n" +
+		"- Gene-disease validity and dosage sensitivity data is embedded static data served locally — no external API calls\n" +
+		"- Variant classifications use the live ClinGen Evidence Repository REST API (erepo.clinicalgenome.org)\n" +
+		"\n" +
+		"== Gene-Disease Validity Classification Levels (SOP v8) ==\n" +
+		"Definitive, Strong, Moderate, Limited, Disputed, Refuted\n" +
+		"\n" +
+		"== Dosage Sensitivity Scores ==\n" +
+		"HI/TS scores: 0 (no evidence), 1 (little), 2 (some/emerging), 3 (sufficient), 40 (autosomal recessive)\n" +
+		"\n" +
+		"== Variant Classification Levels (ACMG/AMP) ==\n" +
+		"Pathogenic, Likely Pathogenic, Uncertain Significance, Likely Benign, Benign\n" +
+		"\n" +
+		"== Examples ==\n" +
+		"GET /validity/curations — all gene-disease validity curations\n" +
+		"GET /validity/curations?gene=BRCA1 — validity curations for BRCA1\n" +
+		"GET /validity/curations?classification=Definitive — all Definitive curations\n" +
+		"GET /validity/curations/TP53 — validity curations for TP53\n" +
+		"GET /dosage/genes — all dosage sensitivity data\n" +
+		"GET /dosage/genes?hi_score=3 — genes with sufficient HI evidence\n" +
+		"GET /dosage/genes/FBN1 — dosage data for FBN1\n" +
+		"GET /classifications?matchMode=exact&gene=BRCA1 — variant classifications from erepo",
 	endpoints: [
-		// === Gene-Disease Validity ===
+		// ===================================================================
+		// Gene-Disease Validity — embedded static data
+		// ===================================================================
 		{
 			method: "GET",
-			path: "/gene-validity",
+			path: "/validity/curations",
 			summary:
-				"Search all gene-disease validity classifications. Returns curated gene-disease relationships with evidence levels.",
-			category: "gene-validity",
+				"List ClinGen gene-disease validity curations with optional filtering by gene, classification, disease, " +
+				"mode of inheritance, or keyword search. Served from embedded static data (~50 high-value curations).",
+			category: "validity",
 			queryParams: [
 				{
-					name: "search",
+					name: "gene",
 					type: "string",
 					required: false,
 					description:
-						"Free-text search across gene symbols, disease names, and ClinGen group names",
-				},
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: false,
-					description: "Filter by HGNC gene symbol (e.g., BRCA1, SCN1A)",
-				},
-				{
-					name: "disease",
-					type: "string",
-					required: false,
-					description:
-						"Filter by disease name or MONDO ID (e.g., MONDO:0007254)",
+						"Filter by gene symbol (e.g., BRCA1, TP53, SCN1A). Case-insensitive.",
 				},
 				{
 					name: "classification",
 					type: "string",
 					required: false,
-					description: "Filter by classification level",
-					enum: [
-						"Definitive",
-						"Strong",
-						"Moderate",
-						"Limited",
-						"Disputed",
-						"Refuted",
-						"No Known Disease Relationship",
-					],
-				},
-				{
-					name: "moi",
-					type: "string",
-					required: false,
-					description: "Filter by mode of inheritance",
-					enum: ["AD", "AR", "XL", "XLD", "XLR", "MT", "SD", "Other"],
-				},
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number for pagination (1-based)",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
 					description:
-						"Number of results per page (default 25, max 100)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/gene-validity/{gene_symbol}",
-			summary:
-				"Get all gene-disease validity classifications for a specific gene. Returns all curated disease associations for the gene.",
-			category: "gene-validity",
-			pathParams: [
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: true,
-					description:
-						"HGNC gene symbol (e.g., BRCA1, TP53, SCN1A)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/gene-validity/summary",
-			summary:
-				"Get summary statistics for gene-disease validity classifications. Returns counts by classification level and mode of inheritance.",
-			category: "gene-validity",
-		},
-		{
-			method: "GET",
-			path: "/gene-validity/{gene_symbol}/{disease_id}",
-			summary:
-				"Get the specific gene-disease validity classification for a gene-disease pair.",
-			category: "gene-validity",
-			pathParams: [
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: true,
-					description: "HGNC gene symbol",
-				},
-				{
-					name: "disease_id",
-					type: "string",
-					required: true,
-					description:
-						"MONDO disease ID (e.g., MONDO:0007254) or disease name slug",
-				},
-			],
-		},
-
-		// === Dosage Sensitivity ===
-		{
-			method: "GET",
-			path: "/dosage/gene/{gene_symbol}",
-			summary:
-				"Get dosage sensitivity scores (haploinsufficiency and triplosensitivity) for a specific gene.",
-			category: "dosage",
-			pathParams: [
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: true,
-					description: "HGNC gene symbol (e.g., BRCA1, MYC)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/dosage/region/{region}",
-			summary:
-				"Get dosage sensitivity data for a chromosomal region. Returns genes and regions with HI/TS scores in the specified genomic interval.",
-			category: "dosage",
-			pathParams: [
-				{
-					name: "region",
-					type: "string",
-					required: true,
-					description:
-						"Chromosomal region in format chr:start-end (e.g., 1:1000000-2000000, 17:41196312-41277500)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/dosage/search",
-			summary:
-				"Search dosage sensitivity records by gene symbol, region, or free text. Returns HI and TS scores with evidence levels.",
-			category: "dosage",
-			queryParams: [
-				{
-					name: "search",
-					type: "string",
-					required: false,
-					description:
-						"Free-text search across gene symbols, region names, and ISCA IDs",
-				},
-				{
-					name: "haplo_score",
-					type: "number",
-					required: false,
-					description:
-						"Filter by haploinsufficiency score (0, 1, 2, 3, or 40 for AR)",
-				},
-				{
-					name: "triplo_score",
-					type: "number",
-					required: false,
-					description:
-						"Filter by triplosensitivity score (0, 1, 2, 3, or 40 for AR)",
-				},
-				{
-					name: "type",
-					type: "string",
-					required: false,
-					description: "Filter by entity type",
-					enum: ["gene", "region"],
-				},
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number for pagination",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page (default 25)",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/dosage/summary",
-			summary:
-				"Get summary statistics for dosage sensitivity curations. Returns counts by HI/TS score levels.",
-			category: "dosage",
-		},
-		{
-			method: "GET",
-			path: "/dosage/genes",
-			summary:
-				"List all genes with dosage sensitivity curations. Returns gene symbols with their HI and TS scores.",
-			category: "dosage",
-			queryParams: [
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/dosage/regions",
-			summary:
-				"List all curated genomic regions with dosage sensitivity data. Includes CNV regions with HI/TS assessments.",
-			category: "dosage",
-			queryParams: [
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page",
-				},
-			],
-		},
-
-		// === Clinical Actionability ===
-		{
-			method: "GET",
-			path: "/actionability",
-			summary:
-				"Search clinical actionability summaries. Returns gene-disease pairs scored for clinical actionability with intervention/outcome data.",
-			category: "actionability",
-			queryParams: [
-				{
-					name: "search",
-					type: "string",
-					required: false,
-					description:
-						"Free-text search across gene symbols and disease names",
-				},
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: false,
-					description: "Filter by gene symbol",
+						"Filter by classification level",
+					enum: ["Definitive", "Strong", "Moderate", "Limited", "Disputed", "Refuted"],
 				},
 				{
 					name: "disease",
 					type: "string",
 					required: false,
-					description: "Filter by disease name or MONDO ID",
+					description:
+						"Filter by disease name (partial match, e.g., 'breast', 'cardiomyopathy')",
 				},
 				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page",
-				},
-			],
-		},
-		{
-			method: "GET",
-			path: "/actionability/{gene_symbol}",
-			summary:
-				"Get clinical actionability data for a specific gene. Returns all actionability-scored disease associations.",
-			category: "actionability",
-			pathParams: [
-				{
-					name: "gene_symbol",
+					name: "mode_of_inheritance",
 					type: "string",
-					required: true,
-					description: "HGNC gene symbol",
+					required: false,
+					description: "Filter by mode of inheritance",
+					enum: ["AD", "AR", "XL", "XLD", "XLR", "SD"],
 				},
-			],
-		},
-
-		// === Variant Curation ===
-		{
-			method: "GET",
-			path: "/variant-pathogenicity",
-			summary:
-				"Search variant pathogenicity classifications from ClinGen Variant Curation Expert Panels (VCEPs).",
-			category: "variant",
-			queryParams: [
 				{
 					name: "search",
 					type: "string",
 					required: false,
 					description:
-						"Free-text search across variant IDs, gene symbols, and classifications",
-				},
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: false,
-					description: "Filter by gene symbol",
-				},
-				{
-					name: "pathogenicity",
-					type: "string",
-					required: false,
-					description: "Filter by pathogenicity classification",
-					enum: [
-						"Pathogenic",
-						"Likely Pathogenic",
-						"Uncertain Significance",
-						"Likely Benign",
-						"Benign",
-					],
-				},
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page",
+						"Free-text search across gene symbol, disease name, GCEP name, HGNC ID, and MONDO ID",
 				},
 			],
+			description:
+				"Returns array of curations with: gene_symbol, hgnc_id, disease_name, mondo_id, classification, " +
+				"mode_of_inheritance, sop_version, gcep (Gene Curation Expert Panel), report_date, report_url. " +
+				"Data sourced from ClinGen Gene-Disease Validity curations (search.clinicalgenome.org/kb/gene-validity).",
 		},
 		{
 			method: "GET",
-			path: "/variant-pathogenicity/{variant_id}",
+			path: "/validity/curations/{gene_symbol}",
 			summary:
-				"Get pathogenicity classification details for a specific variant. Includes ACMG/AMP criteria applied.",
-			category: "variant",
+				"Get gene-disease validity curations for a specific gene by symbol. " +
+				"Returns all curations for that gene (a gene may have multiple disease associations).",
+			category: "validity",
 			pathParams: [
 				{
-					name: "variant_id",
+					name: "gene_symbol",
 					type: "string",
 					required: true,
 					description:
-						"ClinVar variant ID, ClinGen allele ID, or HGVS expression",
+						"HGNC gene symbol (e.g., BRCA1, TP53, MLH1, FBN1, SCN1A)",
 				},
 			],
+			description:
+				"Returns curations matching the gene symbol. A gene may have validity curations for " +
+				"multiple diseases (e.g., BRCA1 for breast cancer, BRCA2 for breast cancer).",
 		},
 
-		// === Gene Lookup / Summary ===
+		// ===================================================================
+		// Dosage Sensitivity — embedded static data
+		// ===================================================================
 		{
 			method: "GET",
-			path: "/genes/{gene_symbol}",
+			path: "/dosage/genes",
 			summary:
-				"Get a comprehensive ClinGen summary for a gene. Aggregates gene validity, dosage sensitivity, actionability, and variant curation data in one response.",
-			category: "gene-validity",
-			pathParams: [
-				{
-					name: "gene_symbol",
-					type: "string",
-					required: true,
-					description: "HGNC gene symbol (e.g., BRCA1, SCN1A)",
-				},
-			],
-		},
-
-		// === Expert Panels / Working Groups ===
-		{
-			method: "GET",
-			path: "/groups",
-			summary:
-				"List ClinGen Expert Panels and Working Groups. Returns group names, types, and the genes/diseases they curate.",
-			category: "gene-validity",
+				"List ClinGen dosage sensitivity data with optional filtering by gene, HI score, TS score, " +
+				"or keyword search. Served from embedded static data (~30 high-value genes).",
+			category: "dosage",
 			queryParams: [
+				{
+					name: "gene",
+					type: "string",
+					required: false,
+					description:
+						"Filter by gene symbol (e.g., FBN1, SHANK3, MECP2). Case-insensitive.",
+				},
+				{
+					name: "hi_score",
+					type: "number",
+					required: false,
+					description:
+						"Filter by haploinsufficiency score (0=none, 1=little, 2=some, 3=sufficient, 40=AR)",
+				},
+				{
+					name: "ts_score",
+					type: "number",
+					required: false,
+					description:
+						"Filter by triplosensitivity score (0=none, 1=little, 2=some, 3=sufficient, 40=AR)",
+				},
 				{
 					name: "search",
 					type: "string",
 					required: false,
-					description: "Search by group name",
-				},
-				{
-					name: "type",
-					type: "string",
-					required: false,
-					description: "Filter by group type",
-					enum: [
-						"Gene Curation Expert Panel",
-						"Variant Curation Expert Panel",
-						"Dosage Sensitivity Curation",
-						"Actionability Working Group",
-					],
-				},
-				{
-					name: "page",
-					type: "number",
-					required: false,
-					description: "Page number",
-				},
-				{
-					name: "limit",
-					type: "number",
-					required: false,
-					description: "Results per page",
+					description:
+						"Free-text search across gene symbol, HI/TS descriptions, and HGNC ID",
 				},
 			],
+			description:
+				"Returns array of entries with: gene_symbol, hgnc_id, hi_score, ts_score, hi_description, " +
+				"ts_description, review_date. Includes score legend in response. " +
+				"Data sourced from ClinGen Dosage Sensitivity curations (search.clinicalgenome.org/kb/gene-dosage).",
 		},
 		{
 			method: "GET",
-			path: "/groups/{group_id}",
+			path: "/dosage/genes/{gene_symbol}",
 			summary:
-				"Get details for a specific ClinGen Expert Panel or Working Group, including curated genes and diseases.",
-			category: "gene-validity",
+				"Get dosage sensitivity data for a specific gene, including haploinsufficiency and triplosensitivity scores.",
+			category: "dosage",
 			pathParams: [
 				{
-					name: "group_id",
+					name: "gene_symbol",
 					type: "string",
 					required: true,
-					description: "ClinGen group identifier",
+					description:
+						"HGNC gene symbol (e.g., FBN1, SHANK3, MECP2, PMP22, RAI1)",
 				},
 			],
+			description:
+				"Returns the gene's HI and TS scores with detailed descriptions of the evidence. " +
+				"Scores: 0 (no evidence), 1 (little), 2 (some/emerging), 3 (sufficient), 40 (autosomal recessive).",
+		},
+
+		// ===================================================================
+		// Variant Curation Repository — live REST API (erepo)
+		// ===================================================================
+		{
+			method: "GET",
+			path: "/classifications",
+			summary:
+				"Search ClinGen variant pathogenicity classifications by gene symbol, variation ID, or disease. " +
+				"From the ClinGen Evidence Repository (erepo.clinicalgenome.org). Live API.",
+			category: "variant",
+			queryParams: [
+				{
+					name: "matchMode",
+					type: "string",
+					required: false,
+					description:
+						"Match mode for search (use 'exact' for precise gene/variation lookups)",
+					enum: ["exact"],
+				},
+				{
+					name: "gene",
+					type: "string",
+					required: false,
+					description:
+						"HGNC gene symbol to search (e.g., BRCA1, TP53). Use with matchMode=exact.",
+				},
+				{
+					name: "variation",
+					type: "string",
+					required: false,
+					description:
+						"ClinVar variation ID to search. Use with matchMode=exact.",
+				},
+				{
+					name: "disease",
+					type: "string",
+					required: false,
+					description: "Disease name to filter results",
+				},
+			],
+			description:
+				"Returns array of variant classification objects with: guideline_shortname, submitted_date, " +
+				"classification (Pathogenic/Likely Pathogenic/Uncertain Significance/Likely Benign/Benign), " +
+				"gene_symbol, variation, disease, criteria_applied. This is a live API call to erepo.clinicalgenome.org.",
+		},
+		{
+			method: "GET",
+			path: "/interpretations/{uuid}",
+			summary:
+				"Get detailed variant interpretation by UUID from the ClinGen Evidence Repository. " +
+				"Returns full ACMG/AMP criteria applied and supporting evidence. Live API.",
+			category: "variant",
+			pathParams: [
+				{
+					name: "uuid",
+					type: "string",
+					required: true,
+					description:
+						"UUID of the specific variant interpretation to retrieve",
+				},
+			],
+			description:
+				"Returns detailed interpretation including all ACMG/AMP criteria applied, " +
+				"evidence summary, classification, and provenance information. Live API call.",
+		},
+
+		// ===================================================================
+		// Evidence Repository with /erepo prefix (alternative routing)
+		// ===================================================================
+		{
+			method: "GET",
+			path: "/erepo/classifications",
+			summary:
+				"Alternative path for variant classifications via /erepo prefix. Same data as /classifications.",
+			category: "variant",
+			queryParams: [
+				{
+					name: "matchMode",
+					type: "string",
+					required: false,
+					description: "Match mode ('exact' for precise lookups)",
+					enum: ["exact"],
+				},
+				{
+					name: "gene",
+					type: "string",
+					required: false,
+					description: "HGNC gene symbol (e.g., BRCA1, TP53)",
+				},
+			],
+			description: "Same as GET /classifications. The /erepo prefix explicitly routes to the Evidence Repository REST API.",
+		},
+		{
+			method: "GET",
+			path: "/erepo/interpretations/{uuid}",
+			summary:
+				"Alternative path for variant interpretations via /erepo prefix. Same data as /interpretations/{uuid}.",
+			category: "variant",
+			pathParams: [
+				{
+					name: "uuid",
+					type: "string",
+					required: true,
+					description: "UUID of the variant interpretation",
+				},
+			],
+			description: "Same as GET /interpretations/{uuid}. The /erepo prefix explicitly routes to the Evidence Repository REST API.",
 		},
 	],
 };

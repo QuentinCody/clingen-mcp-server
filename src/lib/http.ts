@@ -1,61 +1,102 @@
 /**
- * ClinGen API HTTP client.
+ * ClinGen API HTTP clients.
  *
- * Routes requests to two base URLs:
- * - search.clinicalgenome.org/kb — gene-disease validity, actionability, variant curations
- * - dosage.clinicalgenome.org/api — haploinsufficiency/triplosensitivity dosage data
+ * Two distinct APIs:
+ * 1. Gene Validity (GCI) GraphQL — genegraph.clinicalgenome.org/graphql
+ * 2. Variant Curation Repository REST — erepo.clinicalgenome.org/evrepo/api
  */
 
 import { restFetch, type RestFetchOptions } from "@bio-mcp/shared/http/rest-fetch";
 
-const CLINGEN_SEARCH_BASE = "https://search.clinicalgenome.org/kb";
-const CLINGEN_DOSAGE_BASE = "https://dosage.clinicalgenome.org/api";
+const CLINGEN_GRAPHQL_URL = "https://genegraph.clinicalgenome.org/graphql";
+const CLINGEN_EVREPO_BASE = "https://erepo.clinicalgenome.org/evrepo/api";
 
-export interface ClingenFetchOptions extends Omit<RestFetchOptions, "retryOn"> {
-	/** Override base URL */
-	baseUrl?: string;
-	/** Content type for the request */
-	contentType?: string;
+/* ---------- GraphQL (Gene Validity / Dosage) ---------- */
+
+export interface ClingenGraphqlOptions {
+	/** Request timeout in ms (default 30s) */
+	timeout?: number;
+	/** Number of retries (default 3) */
+	retries?: number;
 }
 
 /**
- * Determine which base URL to use based on the path.
- * Paths starting with /dosage use the dosage API; all others use the search API.
+ * Execute a GraphQL query against the ClinGen Genegraph API.
+ * Returns the parsed JSON response (caller should check for `errors` field).
  */
-function resolveBaseUrl(path: string, override?: string): string {
-	if (override) return override;
-	if (path.startsWith("/dosage")) return CLINGEN_DOSAGE_BASE;
-	return CLINGEN_SEARCH_BASE;
-}
+export async function clingenGraphqlFetch(
+	query: string,
+	variables?: Record<string, unknown>,
+	opts?: ClingenGraphqlOptions,
+): Promise<unknown> {
+	const timeout = opts?.timeout ?? 30_000;
+	const retries = opts?.retries ?? 3;
 
-/**
- * Normalize the path for the resolved base URL.
- * For dosage endpoints, strip the leading /dosage prefix since it's already
- * part of the dosage base URL.
- */
-function normalizePath(path: string, baseUrl: string): string {
-	if (baseUrl === CLINGEN_DOSAGE_BASE && path.startsWith("/dosage")) {
-		return path.replace(/^\/dosage/, "") || "/";
+	const body = JSON.stringify({ query, variables: variables ?? {} });
+
+	let lastError: Error | undefined;
+	for (let attempt = 0; attempt <= retries; attempt++) {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), timeout);
+
+		try {
+			const response = await fetch(CLINGEN_GRAPHQL_URL, {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					Accept: "application/json",
+					"User-Agent":
+						"clingen-mcp-server/1.0 (bio-mcp; https://github.com/QuentinCody/clingen-mcp-server)",
+				},
+				body,
+				signal: controller.signal,
+			});
+			clearTimeout(timer);
+
+			if (!response.ok) {
+				const errText = await response.text().catch(() => response.statusText);
+				const shouldRetry = [429, 500, 502, 503].includes(response.status);
+				if (shouldRetry && attempt < retries) {
+					lastError = new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
+					await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)));
+					continue;
+				}
+				throw new Error(`HTTP ${response.status}: ${errText.slice(0, 500)}`);
+			}
+
+			return await response.json();
+		} catch (err) {
+			clearTimeout(timer);
+			if (attempt < retries && (err as Error).name === "AbortError") {
+				lastError = err as Error;
+				continue;
+			}
+			throw err;
+		}
 	}
-	return path;
+
+	throw lastError ?? new Error("GraphQL request failed after retries");
 }
 
+/* ---------- REST (Variant Curation Repository) ---------- */
+
+export interface ClingenRestOptions extends Omit<RestFetchOptions, "retryOn"> {}
+
 /**
- * Fetch from the ClinGen APIs with built-in retry handling.
+ * Fetch from the ClinGen Evidence Repository REST API.
+ * Base URL: https://erepo.clinicalgenome.org/evrepo/api
  */
-export async function clingenFetch(
+export async function clingenRestFetch(
 	path: string,
 	params?: Record<string, unknown>,
-	opts?: ClingenFetchOptions,
+	opts?: ClingenRestOptions,
 ): Promise<Response> {
-	const baseUrl = resolveBaseUrl(path, opts?.baseUrl);
-	const normalizedPath = normalizePath(path, baseUrl);
 	const headers: Record<string, string> = {
-		Accept: opts?.contentType ?? "application/json",
+		Accept: "application/json",
 		...(opts?.headers ?? {}),
 	};
 
-	return restFetch(baseUrl, normalizedPath, params, {
+	return restFetch(CLINGEN_EVREPO_BASE, path, params, {
 		...opts,
 		headers,
 		retryOn: [429, 500, 502, 503],
@@ -63,33 +104,5 @@ export async function clingenFetch(
 		timeout: opts?.timeout ?? 30_000,
 		userAgent:
 			"clingen-mcp-server/1.0 (bio-mcp; https://github.com/QuentinCody/clingen-mcp-server)",
-	});
-}
-
-/**
- * POST to ClinGen APIs (for batch or search endpoints).
- */
-export async function clingenPost(
-	path: string,
-	body: object,
-	opts?: ClingenFetchOptions,
-): Promise<Response> {
-	const baseUrl = resolveBaseUrl(path, opts?.baseUrl);
-	const normalizedPath = normalizePath(path, baseUrl);
-	const headers: Record<string, string> = {
-		"Content-Type": opts?.contentType ?? "application/json",
-		Accept: "application/json",
-		...(opts?.headers ?? {}),
-	};
-
-	return restFetch(baseUrl, normalizedPath, undefined, {
-		...opts,
-		method: "POST",
-		headers,
-		body,
-		retryOn: [429, 500, 502, 503],
-		retries: opts?.retries ?? 3,
-		timeout: opts?.timeout ?? 30_000,
-		userAgent: "clingen-mcp-server/1.0",
 	});
 }
