@@ -329,6 +329,58 @@ export const dosageSensitivityEntries: DosageSensitivityEntry[] = [
 			"No evidence for triplosensitivity. Duplications of HTT have not been associated with disease.",
 		review_date: "2022-06-27",
 	},
+
+	// --- Pharmacogenomics ---
+	{
+		gene_symbol: "DPYD",
+		hgnc_id: "HGNC:3012",
+		hi_score: 40,
+		ts_score: 0,
+		hi_description:
+			"Autosomal recessive. Heterozygous DPYD loss-of-function carriers are asymptomatic unless exposed to fluoropyrimidine chemotherapy, where reduced DPD activity causes severe drug toxicity. Complete DPD deficiency (homozygous) causes dihydropyrimidine dehydrogenase deficiency with thymine-uraciluria and neurodevelopmental features.",
+		ts_description: "No evidence for triplosensitivity.",
+		review_date: "2023-01-23",
+	},
+	{
+		gene_symbol: "TPMT",
+		hgnc_id: "HGNC:12014",
+		hi_score: 40,
+		ts_score: 0,
+		hi_description:
+			"Autosomal recessive. Heterozygous TPMT deficiency carriers have intermediate enzyme activity. Homozygous deficiency causes severe myelosuppression with standard-dose thiopurine therapy (azathioprine, 6-mercaptopurine).",
+		ts_description: "No evidence for triplosensitivity.",
+		review_date: "2023-01-23",
+	},
+	{
+		gene_symbol: "CYP2D6",
+		hgnc_id: "HGNC:2625",
+		hi_score: 40,
+		ts_score: 0,
+		hi_description:
+			"Autosomal recessive. CYP2D6 poor metabolizer status affects metabolism of codeine, tamoxifen, antidepressants, and many other drugs. Loss-of-function is common (5-10% of European populations) with no non-drug phenotype.",
+		ts_description: "No evidence for triplosensitivity. CYP2D6 gene duplications cause ultra-rapid metabolizer status.",
+		review_date: "2023-01-23",
+	},
+	{
+		gene_symbol: "UGT1A1",
+		hgnc_id: "HGNC:12530",
+		hi_score: 40,
+		ts_score: 0,
+		hi_description:
+			"Autosomal recessive. Homozygous UGT1A1*28 causes Gilbert syndrome (mild unconjugated hyperbilirubinemia) and increased toxicity with irinotecan chemotherapy. Crigler-Najjar syndrome results from complete loss.",
+		ts_description: "No evidence for triplosensitivity.",
+		review_date: "2023-01-23",
+	},
+	{
+		gene_symbol: "G6PD",
+		hgnc_id: "HGNC:4057",
+		hi_score: 40,
+		ts_score: 0,
+		hi_description:
+			"X-linked recessive. G6PD deficiency causes hemolytic anemia upon exposure to oxidative stressors including antimalarial drugs (primaquine, rasburicase, dapsone). Most common enzyme deficiency worldwide (~400 million affected).",
+		ts_description: "No evidence for triplosensitivity.",
+		review_date: "2023-01-23",
+	},
 ];
 
 /**
