@@ -14,7 +14,7 @@ interface ClingenEnv {
 }
 
 export class MyMCP extends McpAgent {
-    server: any = new McpServer({
+    server = new McpServer({
         name: "clingen",
         version: "0.1.0",
     });
