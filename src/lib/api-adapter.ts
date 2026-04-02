@@ -4,10 +4,11 @@
  * /validity/*  — Served from embedded gene-disease validity static data
  * /dosage/*    — Served from embedded dosage sensitivity static data
  * /erepo/*     — Proxied to erepo.clinicalgenome.org/evrepo/api (variant classifications)
+ * /g2p/*       — Proxied to www.ebi.ac.uk/gene2phenotype/api (gene-disease associations)
  *
  * This is a multi-API adapter: static embedded data for gene-disease validity and dosage
  * sensitivity (since the ClinGen GraphQL endpoint is down as of 2026-03), plus live REST
- * proxy for variant curation from the Evidence Repository.
+ * proxy for variant curation from the Evidence Repository and Gene2Phenotype from EBI.
  */
 
 import type { ApiFetchFn } from "@bio-mcp/shared/codemode/catalog";
@@ -208,11 +209,74 @@ async function handleErepo(
 	}
 }
 
+/* ---------- Gene2Phenotype (live proxy via EBI) ---------- */
+
+const G2P_BASE_URL = "https://www.ebi.ac.uk/gene2phenotype/api";
+
+async function handleG2P(
+	path: string,
+	params?: Record<string, unknown>,
+): Promise<{ status: number; data: unknown }> {
+	try {
+		let url: string;
+
+		// /g2p/gene/{symbol} → GET /gene/{symbol}/
+		const geneMatch = path.match(/^\/g2p\/gene\/(.+)$/);
+		if (geneMatch) {
+			const symbol = encodeURIComponent(geneMatch[1]);
+			url = `${G2P_BASE_URL}/gene/${symbol}/`;
+		}
+		// /g2p/panel/{name} → GET /panel/{name}/
+		else if (path.match(/^\/g2p\/panel\/(.+)$/)) {
+			const panelMatch = path.match(/^\/g2p\/panel\/(.+)$/);
+			const name = encodeURIComponent(panelMatch![1]);
+			url = `${G2P_BASE_URL}/panel/${name}/`;
+		}
+		// /g2p/search?query=X → GET /search/?query=X
+		else if (path === "/g2p/search") {
+			const query = params?.query ? String(params.query) : "";
+			url = `${G2P_BASE_URL}/search/?query=${encodeURIComponent(query)}`;
+		} else {
+			return errorResponse(`Unknown G2P path: ${path}`);
+		}
+
+		const response = await fetch(url, {
+			headers: { Accept: "application/json" },
+		});
+
+		if (!response.ok) {
+			let errorBody: string;
+			try {
+				errorBody = await response.text();
+			} catch {
+				errorBody = response.statusText;
+			}
+			return errorResponse(
+				`G2P API error: HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
+				response.status,
+			);
+		}
+
+		const contentType = response.headers.get("content-type") || "";
+		if (!contentType.includes("json")) {
+			const text = await response.text();
+			return { status: response.status, data: text };
+		}
+
+		const data = await response.json();
+		return { status: response.status, data };
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		return errorResponse(`G2P API request failed: ${msg}`, 502);
+	}
+}
+
 /**
  * Create an ApiFetchFn that routes based on path prefix:
  * - /validity/*  -> embedded static gene-disease validity data
  * - /dosage/*    -> embedded static dosage sensitivity data
  * - /erepo/*     -> proxied to ClinGen Evidence Repository REST API
+ * - /g2p/*       -> proxied to EBI Gene2Phenotype REST API
  * - (legacy) /classifications, /interpretations -> direct erepo proxy
  */
 export function createClingenApiFetch(): ApiFetchFn {
@@ -232,6 +296,11 @@ export function createClingenApiFetch(): ApiFetchFn {
 		// Evidence Repository REST API (with /erepo prefix)
 		if (path.startsWith("/erepo/") || path === "/erepo") {
 			return handleErepo(path, params);
+		}
+
+		// Gene2Phenotype REST API (EBI)
+		if (path.startsWith("/g2p/") || path === "/g2p") {
+			return handleG2P(path, params);
 		}
 
 		// Legacy: direct erepo paths (e.g., /classifications, /interpretations/{uuid})

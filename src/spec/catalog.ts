@@ -1,9 +1,10 @@
 /**
- * ClinGen API catalog — multi-source: embedded static data + Evidence Repository REST API.
+ * ClinGen API catalog — multi-source: embedded static data + Evidence Repository REST API + Gene2Phenotype.
  *
  * Gene-Disease Validity: Embedded static data (source: search.clinicalgenome.org/kb/gene-validity)
  * Dosage Sensitivity: Embedded static data (source: search.clinicalgenome.org/kb/gene-dosage)
  * Variant Classifications: Live REST API (erepo.clinicalgenome.org/evrepo/api)
+ * Gene2Phenotype (G2P): Live REST API (www.ebi.ac.uk/gene2phenotype/api)
  *
  * NOTE: The ClinGen GCI GraphQL endpoint (genegraph.clinicalgenome.org/graphql) is currently
  * returning 404 (as of 2026-03). Gene-disease validity and dosage sensitivity data are now
@@ -13,20 +14,23 @@
  * In Code Mode: api.get('/validity/curations', { gene: 'BRCA1' })
  *               api.get('/dosage/genes/FBN1')
  *               api.get('/classifications', { gene: 'BRCA1', matchMode: 'exact' })
+ *               api.get('/g2p/gene/BRCA1')
  */
 
 import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
 
 export const clingenCatalog: ApiCatalog = {
-	name: "ClinGen (Gene Validity + Dosage Sensitivity + Variant Curation)",
-	baseUrl: "embedded://clingen + https://erepo.clinicalgenome.org/evrepo/api",
+	name: "ClinGen (Gene Validity + Dosage Sensitivity + Variant Curation + Gene2Phenotype)",
+	baseUrl: "embedded://clingen + https://erepo.clinicalgenome.org/evrepo/api + https://www.ebi.ac.uk/gene2phenotype/api",
 	version: "2026.03",
 	auth: "none",
-	endpointCount: 8,
+	endpointCount: 11,
 	notes:
-		"- Multi-source adapter: /validity/* (gene-disease validity), /dosage/* (dosage sensitivity), /classifications + /interpretations (variant curation)\n" +
+		"- Multi-source adapter: /validity/* (gene-disease validity), /dosage/* (dosage sensitivity), /classifications + /interpretations (variant curation), /g2p/* (Gene2Phenotype)\n" +
 		"- Gene-disease validity and dosage sensitivity data is embedded static data served locally — no external API calls\n" +
 		"- Variant classifications use the live ClinGen Evidence Repository REST API (erepo.clinicalgenome.org)\n" +
+		"- Gene2Phenotype (G2P) data: /g2p/* — gene-disease associations with allelic_requirement (monoallelic/biallelic), mutation_consequence (LoF/GoF), confidence (definitive/strong/moderate/limited)\n" +
+		"- G2P panels: Cancer, DD, Skeletal, Eye, Ear, Skin, Cardiac\n" +
 		"\n" +
 		"== Gene-Disease Validity Classification Levels (SOP v8) ==\n" +
 		"Definitive, Strong, Moderate, Limited, Disputed, Refuted\n" +
@@ -45,7 +49,10 @@ export const clingenCatalog: ApiCatalog = {
 		"GET /dosage/genes — all dosage sensitivity data\n" +
 		"GET /dosage/genes?hi_score=3 — genes with sufficient HI evidence\n" +
 		"GET /dosage/genes/FBN1 — dosage data for FBN1\n" +
-		"GET /classifications?matchMode=exact&gene=BRCA1 — variant classifications from erepo",
+		"GET /classifications?matchMode=exact&gene=BRCA1 — variant classifications from erepo\n" +
+		"GET /g2p/gene/BRCA1 — G2P gene detail with disease associations\n" +
+		"GET /g2p/search?query=breast — search G2P genes/diseases\n" +
+		"GET /g2p/panel/Cancer — browse curated G2P panel",
 	endpoints: [
 		// ===================================================================
 		// Gene-Disease Validity — embedded static data
@@ -293,6 +300,69 @@ export const clingenCatalog: ApiCatalog = {
 				},
 			],
 			description: "Same as GET /interpretations/{uuid}. The /erepo prefix explicitly routes to the Evidence Repository REST API.",
+		},
+
+		// ===================================================================
+		// Gene2Phenotype (G2P) — live REST API (ebi.ac.uk)
+		// ===================================================================
+		{
+			method: "GET",
+			path: "/g2p/gene/{symbol}",
+			summary:
+				"Get Gene2Phenotype gene detail with disease associations, mechanism of action, " +
+				"allelic requirement, and confidence level. Live API via EBI.",
+			category: "g2p",
+			pathParams: [
+				{
+					name: "symbol",
+					type: "string",
+					required: true,
+					description:
+						"HGNC gene symbol (e.g., BRCA1, TP53, FGFR3, SCN1A)",
+				},
+			],
+			description:
+				"Returns gene information including disease associations with: allelic_requirement " +
+				"(monoallelic, biallelic), mutation_consequence (loss of function, gain of function), " +
+				"confidence level (definitive, strong, moderate, limited), panels, and publication references.",
+		},
+		{
+			method: "GET",
+			path: "/g2p/search",
+			summary:
+				"Search Gene2Phenotype for genes or diseases by query term. Returns matching entries across all G2P panels.",
+			category: "g2p",
+			queryParams: [
+				{
+					name: "query",
+					type: "string",
+					required: true,
+					description:
+						"Search term — gene symbol, gene name, or disease name (e.g., 'BRCA1', 'breast', 'retinitis')",
+				},
+			],
+			description:
+				"Searches across Gene2Phenotype entries. Returns matching genes and diseases with " +
+				"their panel membership, confidence level, and allelic requirement.",
+		},
+		{
+			method: "GET",
+			path: "/g2p/panel/{name}",
+			summary:
+				"Browse a curated Gene2Phenotype panel. Available panels: Cancer, DD, Skeletal, Eye, Ear, Skin, Cardiac.",
+			category: "g2p",
+			pathParams: [
+				{
+					name: "name",
+					type: "string",
+					required: true,
+					description:
+						"Panel name: Cancer, DD (developmental disorders), Skeletal, Eye, Ear, Skin, or Cardiac",
+				},
+			],
+			description:
+				"Returns all gene-disease entries in the specified G2P panel, including gene symbol, " +
+				"disease name, allelic requirement, mutation consequence, and confidence level.",
 		},
 	],
 };
