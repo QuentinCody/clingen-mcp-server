@@ -84,7 +84,7 @@ function handleValidity(
 		return errorResponse(
 			`No gene-disease validity curations found for gene: ${geneSymbol}. ` +
 			`This embedded dataset contains ${geneValidityCurations.length} curations for high-value genes. ` +
-			`For a complete list, use GET /validity/curations.`,
+			"For a complete list, use GET /validity/curations.",
 		);
 	}
 
@@ -163,7 +163,7 @@ function handleDosage(
 		return errorResponse(
 			`No dosage sensitivity data found for gene: ${geneSymbol}. ` +
 			`This embedded dataset contains ${dosageSensitivityEntries.length} genes. ` +
-			`For a complete list, use GET /dosage/genes.`,
+			"For a complete list, use GET /dosage/genes.",
 		);
 	}
 
@@ -302,10 +302,6 @@ export function createClingenApiFetch(): ApiFetchFn {
 		if (path.startsWith("/g2p/") || path === "/g2p") {
 			return handleG2P(path, params);
 		}
-
-		// Legacy: direct erepo paths (e.g., /classifications, /interpretations/{uuid})
-		// Forward them to the erepo REST API without prefix stripping
-		try {
 			const response = await clingenRestFetch(path, params);
 
 			if (!response.ok) {
@@ -334,8 +330,5 @@ export function createClingenApiFetch(): ApiFetchFn {
 
 			const data = await response.json();
 			return { status: response.status, data };
-		} catch (err) {
-			throw err;
-		}
 	};
 }
