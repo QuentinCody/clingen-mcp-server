@@ -12,17 +12,17 @@
  */
 
 import type { ApiFetchFn } from "@bio-mcp/shared/codemode/catalog";
-import { clingenRestFetch } from "./http";
+import {
+	dosageSensitivityEntries,
+	filterDosageSensitivity,
+	findDosageSensitivity,
+} from "./data/dosage-sensitivity";
 import {
 	filterGeneValidityCurations,
 	findGeneValidityCurations,
 	geneValidityCurations,
 } from "./data/gene-validity";
-import {
-	filterDosageSensitivity,
-	findDosageSensitivity,
-	dosageSensitivityEntries,
-} from "./data/dosage-sensitivity";
+import { clingenRestFetch } from "./http";
 
 /**
  * Build a synthetic JSON response from data.
@@ -33,9 +33,46 @@ function jsonResponse(data: unknown, status = 200): { status: number; data: unkn
 
 /**
  * Build an error response.
+ *
+ * ONLY for a true negative that is itself an answer — e.g. "this gene has no
+ * curations in the embedded dataset". For an upstream failure or a bad path use
+ * {@link throwApiError}: the host proxy marks a call failed only when apiFetch
+ * THROWS, so anything returned here reaches the isolate as ordinary data.
  */
 function errorResponse(message: string, status = 404): { status: number; data: unknown } {
 	return { status, data: { error: message } };
+}
+
+/**
+ * Fail the call the way the rest of the fleet does — by throwing.
+ *
+ * The host proxy (`@bio-mcp/shared` tools/api-proxy) sets `__api_error` in its
+ * CATCH block; a returned `{status, data}` is passed through as `result.data`
+ * without ever consulting `status`. So an upstream 500 that is *returned* is
+ * indistinguishable from real data: the isolate receives `{error: "..."}`,
+ * `result.curations` is undefined, and the program reports "no results found"
+ * for a database that was simply down — with a `_meta.citation` attesting it.
+ *
+ * Mirrors the ensembl adapter (the fleet's reference REST adapter), which
+ * attaches status/data to the Error and throws.
+ */
+function throwApiError(message: string, status: number, data?: unknown): never {
+	const error = new Error(message) as Error & { status: number; data: unknown };
+	error.status = status;
+	error.data = data ?? { error: message };
+	throw error;
+}
+
+/**
+ * True for an error already shaped by {@link throwApiError}.
+ *
+ * The handlers below throw from INSIDE their own `try`, so without this their
+ * `catch` would immediately re-wrap an HTTP-status error as a generic 502 —
+ * losing the upstream status and, before this change, turning it back into
+ * returned data.
+ */
+function isApiError(err: unknown): err is Error & { status: number; data: unknown } {
+	return err instanceof Error && typeof (err as { status?: unknown }).status === "number";
 }
 
 /* ---------- Gene-Disease Validity (static) ---------- */
@@ -56,7 +93,8 @@ function handleValidity(
 		if (params?.gene) filters.gene = String(params.gene);
 		if (params?.classification) filters.classification = String(params.classification);
 		if (params?.disease) filters.disease = String(params.disease);
-		if (params?.mode_of_inheritance) filters.mode_of_inheritance = String(params.mode_of_inheritance);
+		if (params?.mode_of_inheritance)
+			filters.mode_of_inheritance = String(params.mode_of_inheritance);
 		if (params?.search || params?.q) filters.search = String(params?.search || params?.q);
 
 		const results = filterGeneValidityCurations(
@@ -83,8 +121,8 @@ function handleValidity(
 		}
 		return errorResponse(
 			`No gene-disease validity curations found for gene: ${geneSymbol}. ` +
-			`This embedded dataset contains ${geneValidityCurations.length} curations for high-value genes. ` +
-			"For a complete list, use GET /validity/curations.",
+				`This embedded dataset contains ${geneValidityCurations.length} curations for high-value genes. ` +
+				"For a complete list, use GET /validity/curations.",
 		);
 	}
 
@@ -106,7 +144,7 @@ function handleValidity(
 		return jsonResponse({ gceps });
 	}
 
-	return errorResponse(`Unknown validity path: ${path}`);
+	throwApiError(`Unknown validity path: ${path}`, 404);
 }
 
 /* ---------- Dosage Sensitivity (static) ---------- */
@@ -162,12 +200,12 @@ function handleDosage(
 		}
 		return errorResponse(
 			`No dosage sensitivity data found for gene: ${geneSymbol}. ` +
-			`This embedded dataset contains ${dosageSensitivityEntries.length} genes. ` +
-			"For a complete list, use GET /dosage/genes.",
+				`This embedded dataset contains ${dosageSensitivityEntries.length} genes. ` +
+				"For a complete list, use GET /dosage/genes.",
 		);
 	}
 
-	return errorResponse(`Unknown dosage path: ${path}`);
+	throwApiError(`Unknown dosage path: ${path}`, 404);
 }
 
 /* ---------- Evidence Repository REST (live proxy) ---------- */
@@ -189,9 +227,10 @@ async function handleErepo(
 			} catch {
 				errorBody = response.statusText;
 			}
-			return errorResponse(
+			throwApiError(
 				`ClinGen erepo API error: HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
 				response.status,
+				errorBody,
 			);
 		}
 
@@ -204,8 +243,9 @@ async function handleErepo(
 		const data = await response.json();
 		return { status: response.status, data };
 	} catch (err) {
+		if (isApiError(err)) throw err;
 		const msg = err instanceof Error ? err.message : String(err);
-		return errorResponse(`ClinGen erepo API request failed: ${msg}`, 502);
+		throwApiError(`ClinGen erepo API request failed: ${msg}`, 502);
 	}
 }
 
@@ -237,7 +277,7 @@ async function handleG2P(
 			const query = params?.query ? String(params.query) : "";
 			url = `${G2P_BASE_URL}/search/?query=${encodeURIComponent(query)}`;
 		} else {
-			return errorResponse(`Unknown G2P path: ${path}`);
+			throwApiError(`Unknown G2P path: ${path}`, 404);
 		}
 
 		const response = await fetch(url, {
@@ -251,9 +291,10 @@ async function handleG2P(
 			} catch {
 				errorBody = response.statusText;
 			}
-			return errorResponse(
+			throwApiError(
 				`G2P API error: HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
 				response.status,
+				errorBody,
 			);
 		}
 
@@ -266,8 +307,9 @@ async function handleG2P(
 		const data = await response.json();
 		return { status: response.status, data };
 	} catch (err) {
+		if (isApiError(err)) throw err;
 		const msg = err instanceof Error ? err.message : String(err);
-		return errorResponse(`G2P API request failed: ${msg}`, 502);
+		throwApiError(`G2P API request failed: ${msg}`, 502);
 	}
 }
 
@@ -302,33 +344,33 @@ export function createClingenApiFetch(): ApiFetchFn {
 		if (path.startsWith("/g2p/") || path === "/g2p") {
 			return handleG2P(path, params);
 		}
-			const response = await clingenRestFetch(path, params);
+		const response = await clingenRestFetch(path, params);
 
-			if (!response.ok) {
-				let errorBody: string;
-				try {
-					errorBody = await response.text();
-				} catch {
-					errorBody = response.statusText;
-				}
-				const error = new Error(
-					`HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
-				) as Error & {
-					status: number;
-					data: unknown;
-				};
-				error.status = response.status;
-				error.data = errorBody;
-				throw error;
+		if (!response.ok) {
+			let errorBody: string;
+			try {
+				errorBody = await response.text();
+			} catch {
+				errorBody = response.statusText;
 			}
+			const error = new Error(
+				`HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
+			) as Error & {
+				status: number;
+				data: unknown;
+			};
+			error.status = response.status;
+			error.data = errorBody;
+			throw error;
+		}
 
-			const contentType = response.headers.get("content-type") || "";
-			if (!contentType.includes("json")) {
-				const text = await response.text();
-				return { status: response.status, data: text };
-			}
+		const contentType = response.headers.get("content-type") || "";
+		if (!contentType.includes("json")) {
+			const text = await response.text();
+			return { status: response.status, data: text };
+		}
 
-			const data = await response.json();
-			return { status: response.status, data };
+		const data = await response.json();
+		return { status: response.status, data };
 	};
 }
