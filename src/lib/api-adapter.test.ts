@@ -70,7 +70,7 @@ describe("createClingenApiFetch — upstream failures must throw, not become dat
 	it("throws when the G2P upstream returns 500", async () => {
 		vi.stubGlobal(
 			"fetch",
-			vi.fn().mockResolvedValue(httpResponse(500, "EBI down")),
+			vi.fn().mockResolvedValue(new Response("EBI down", { status: 500 })),
 		);
 		const apiFetch = createClingenApiFetch();
 

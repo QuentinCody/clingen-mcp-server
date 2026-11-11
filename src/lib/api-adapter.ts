@@ -1,17 +1,25 @@
 /**
  * ClinGen API adapter — routes requests by path prefix to the appropriate data source.
  *
- * /validity/*  — Served from embedded gene-disease validity static data
- * /dosage/*    — Served from embedded dosage sensitivity static data
+ * /validity/export — Current official gene-disease validity CSV export
+ * /validity/*  — Other paths use embedded gene-disease validity static data
+ * /dosage/genes* — Served from embedded dosage sensitivity static data
+ * /dosage/curations — Current official gene-only CSV export
  * /erepo/*     — Proxied to erepo.clinicalgenome.org/evrepo/api (variant classifications)
  * /g2p/*       — Proxied to www.ebi.ac.uk/gene2phenotype/api (gene-disease associations)
+ * /actionability/* — Proxied to official Adult/Pediatric JSON and assertion TSV feeds
  *
  * This is a multi-API adapter: static embedded data for gene-disease validity and dosage
- * sensitivity (since the ClinGen GraphQL endpoint is down as of 2026-03), plus live REST
- * proxy for variant curation from the Evidence Repository and Gene2Phenotype from EBI.
+ * sensitivity (a partial snapshot declared as 2026-03), plus REST proxies for actionability,
+ * variant curation from the Evidence Repository and Gene2Phenotype from EBI.
  */
 
 import type { ApiFetchFn } from "@bio-mcp/shared/codemode/catalog";
+import { fetchActionability } from "./actionability";
+import { fetchDosageFeed } from "./dosage-feed";
+import { fetchValidityFeed } from "./validity-feed";
+import { fetchG2P } from "./g2p";
+import { validityReviewContext } from "./validity-review-context";
 import {
 	dosageSensitivityEntries,
 	filterDosageSensitivity,
@@ -28,7 +36,12 @@ import { clingenRestFetch } from "./http";
  * Build a synthetic JSON response from data.
  */
 function jsonResponse(data: unknown, status = 200): { status: number; data: unknown } {
-	return { status, data };
+	return { status, data: { ...(data as Record<string, unknown>), _dataset: {
+		kind: "embedded_subset", declared_snapshot: "2026-03", complete: false,
+		current_curation_verified: false,
+		absence_scope: "No match means absent from this local subset, not absent from ClinGen.",
+		source: "https://search.clinicalgenome.org/kb/downloads",
+	} } };
 }
 
 /**
@@ -40,7 +53,7 @@ function jsonResponse(data: unknown, status = 200): { status: number; data: unkn
  * THROWS, so anything returned here reaches the isolate as ordinary data.
  */
 function errorResponse(message: string, status = 404): { status: number; data: unknown } {
-	return { status, data: { error: message } };
+	return jsonResponse({ error: message }, status);
 }
 
 /**
@@ -102,8 +115,9 @@ function handleValidity(
 		);
 		return jsonResponse({
 			total: results.length,
-			source: "ClinGen Gene-Disease Validity curations (embedded static data, 2026-03)",
+			source: "ClinGen Gene-Disease Validity (partial embedded subset with dated source checks, not a verified release)",
 			curations: results,
+			curation_review: validityReviewContext(filters.gene, filters.search),
 		});
 	}
 
@@ -112,17 +126,19 @@ function handleValidity(
 	if (geneMatch) {
 		const geneSymbol = decodeURIComponent(geneMatch[1]).toUpperCase();
 		const results = findGeneValidityCurations(geneSymbol);
-		if (results.length > 0) {
+		const review = validityReviewContext(geneSymbol);
+		if (results.length > 0 || review) {
 			return jsonResponse({
 				gene_symbol: geneSymbol,
 				total: results.length,
 				curations: results,
+				curation_review: review,
 			});
 		}
 		return errorResponse(
 			`No gene-disease validity curations found for gene: ${geneSymbol}. ` +
 				`This embedded dataset contains ${geneValidityCurations.length} curations for high-value genes. ` +
-				"For a complete list, use GET /validity/curations.",
+				"GET /validity/curations lists only this local subset; consult ClinGen downloads for current coverage.",
 		);
 	}
 
@@ -171,20 +187,24 @@ function handleDosage(
 		);
 		return jsonResponse({
 			total: results.length,
-			source: "ClinGen Dosage Sensitivity curations (embedded static data, 2026-03)",
+			source: "ClinGen Dosage Sensitivity curations (partial 2026-03 base with source_checked_on corrections)",
 			hi_score_legend: {
+				[-5]: "Not yet evaluated",
 				0: "No evidence for haploinsufficiency",
 				1: "Little evidence for haploinsufficiency",
 				2: "Some evidence for haploinsufficiency (emerging)",
 				3: "Sufficient evidence for haploinsufficiency",
-				40: "Autosomal recessive (gene dosage sensitivity unlikely)",
+				30: "Gene associated with autosomal recessive phenotype",
+				40: "Dosage sensitivity unlikely",
 			},
 			ts_score_legend: {
+				[-5]: "Not yet evaluated",
 				0: "No evidence for triplosensitivity",
 				1: "Little evidence for triplosensitivity",
 				2: "Some evidence for triplosensitivity (emerging)",
 				3: "Sufficient evidence for triplosensitivity",
-				40: "Autosomal recessive (gene dosage sensitivity unlikely)",
+				30: "Gene associated with autosomal recessive phenotype",
+				40: "Dosage sensitivity unlikely",
 			},
 			genes: results,
 		});
@@ -201,7 +221,7 @@ function handleDosage(
 		return errorResponse(
 			`No dosage sensitivity data found for gene: ${geneSymbol}. ` +
 				`This embedded dataset contains ${dosageSensitivityEntries.length} genes. ` +
-				"For a complete list, use GET /dosage/genes.",
+				"GET /dosage/genes lists only this local subset; consult ClinGen downloads for current coverage.",
 		);
 	}
 
@@ -251,72 +271,10 @@ async function handleErepo(
 
 /* ---------- Gene2Phenotype (live proxy via EBI) ---------- */
 
-const G2P_BASE_URL = "https://www.ebi.ac.uk/gene2phenotype/api";
-
-async function handleG2P(
-	path: string,
-	params?: Record<string, unknown>,
-): Promise<{ status: number; data: unknown }> {
-	try {
-		let url: string;
-
-		// /g2p/gene/{symbol} → GET /gene/{symbol}/
-		const geneMatch = path.match(/^\/g2p\/gene\/(.+)$/);
-		if (geneMatch) {
-			const symbol = encodeURIComponent(geneMatch[1]);
-			url = `${G2P_BASE_URL}/gene/${symbol}/`;
-		}
-		// /g2p/panel/{name} → GET /panel/{name}/
-		else if (path.match(/^\/g2p\/panel\/(.+)$/)) {
-			const panelMatch = path.match(/^\/g2p\/panel\/(.+)$/);
-			const name = encodeURIComponent(panelMatch![1]);
-			url = `${G2P_BASE_URL}/panel/${name}/`;
-		}
-		// /g2p/search?query=X → GET /search/?query=X
-		else if (path === "/g2p/search") {
-			const query = params?.query ? String(params.query) : "";
-			url = `${G2P_BASE_URL}/search/?query=${encodeURIComponent(query)}`;
-		} else {
-			throwApiError(`Unknown G2P path: ${path}`, 404);
-		}
-
-		const response = await fetch(url, {
-			headers: { Accept: "application/json" },
-		});
-
-		if (!response.ok) {
-			let errorBody: string;
-			try {
-				errorBody = await response.text();
-			} catch {
-				errorBody = response.statusText;
-			}
-			throwApiError(
-				`G2P API error: HTTP ${response.status}: ${errorBody.slice(0, 200)}`,
-				response.status,
-				errorBody,
-			);
-		}
-
-		const contentType = response.headers.get("content-type") || "";
-		if (!contentType.includes("json")) {
-			const text = await response.text();
-			return { status: response.status, data: text };
-		}
-
-		const data = await response.json();
-		return { status: response.status, data };
-	} catch (err) {
-		if (isApiError(err)) throw err;
-		const msg = err instanceof Error ? err.message : String(err);
-		throwApiError(`G2P API request failed: ${msg}`, 502);
-	}
-}
-
 /**
  * Create an ApiFetchFn that routes based on path prefix:
  * - /validity/*  -> embedded static gene-disease validity data
- * - /dosage/*    -> embedded static dosage sensitivity data
+ * - /dosage/genes* -> embedded static dosage sensitivity data; /dosage/curations -> current CSV
  * - /erepo/*     -> proxied to ClinGen Evidence Repository REST API
  * - /g2p/*       -> proxied to EBI Gene2Phenotype REST API
  * - (legacy) /classifications, /interpretations -> direct erepo proxy
@@ -324,6 +282,10 @@ async function handleG2P(
 export function createClingenApiFetch(): ApiFetchFn {
 	return async (request) => {
 		const { path, params } = request;
+		if (request.method !== "GET" || request.body !== undefined) throwApiError("ClinGen routes support GET without a body", 400);
+		if (path.startsWith("/actionability/") || path === "/actionability") return fetchActionability(request);
+		if (path === "/dosage/curations") return fetchDosageFeed(request);
+		if (path === "/validity/export") return fetchValidityFeed(request);
 
 		// Static gene-disease validity data
 		if (path.startsWith("/validity/") || path === "/validity") {
@@ -342,7 +304,7 @@ export function createClingenApiFetch(): ApiFetchFn {
 
 		// Gene2Phenotype REST API (EBI)
 		if (path.startsWith("/g2p/") || path === "/g2p") {
-			return handleG2P(path, params);
+			return fetchG2P(request);
 		}
 		const response = await clingenRestFetch(path, params);
 

@@ -15,6 +15,8 @@ export class ClingenDataDO extends RestStagingDO {
 		if (!data || typeof data !== "object") return undefined;
 
 		const obj = data as Record<string, unknown>;
+		const domainHints = evidenceDomainHints(obj);
+		if (domainHints) return domainHints;
 
 		// --- GraphQL response shape: { data: { <query>: [...] } } ---
 		if (obj.data && typeof obj.data === "object") {
@@ -97,4 +99,17 @@ export class ClingenDataDO extends RestStagingDO {
 
 		return undefined;
 	}
+}
+
+function evidenceDomainHints(obj: Record<string, unknown>): SchemaHints | undefined {
+		if (obj.evidence_domain === "dosage_sensitivity" && Array.isArray(obj.records)) {
+			return { tableName: "dosage_curations", indexes: ["GENE SYMBOL", "HGNC ID"] };
+		}
+		if (obj.evidence_domain === "gene_disease_validity" && Array.isArray(obj.records)) {
+			return { tableName: "validity_curations", indexes: ["GENE SYMBOL", "GENE ID (HGNC)", "DISEASE ID (MONDO)"] };
+		}
+		if (obj.evidence_domain === "clinical_actionability" && Array.isArray(obj.records)) {
+			const present = obj.records[0] as Record<string, unknown> | undefined;
+			return { tableName: "actionability_records", indexes: ["docId", "# docId", "geneOrVariant", "context"].filter(key => present && key in present) };
+		}
 }
